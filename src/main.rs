@@ -9,18 +9,13 @@ enum Command {
 
 impl Command {
     fn try_parse(input_parts: &[&str]) -> Result<Self, InvalidCommand> {
-        if let Some(&command) = input_parts.get(0) {
-            if command == "exit" {
-                if input_parts.get(1).is_none() {
-                    return Err(InvalidCommand);
-                }
-                let code = *input_parts.get(1).unwrap();
-                return Ok(Self::Exit(code.parse().map_err(|_err| InvalidCommand)?));
-            } else {
-                return Err(InvalidCommand);
+        match input_parts {
+            ["exit", code] => {
+                let code = code.parse::<u8>().map_err(|_| InvalidCommand)?;
+                Ok(Self::Exit(code))
             }
-        } else {
-            return Ok(Self::Other);
+            ["exit"] => Err(InvalidCommand),
+            _ => Ok(Self::Other),
         }
     }
 }

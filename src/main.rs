@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 enum Command {
     Exit(u8),
+    Echo(String),
     Other,
 }
 
@@ -15,6 +16,7 @@ impl Command {
                 Ok(Self::Exit(code))
             }
             ["exit"] => Err(InvalidCommand),
+            ["echo", arg @ ..] => Ok(Self::Echo(arg.join(" "))),
             _ => Ok(Self::Other),
         }
     }
@@ -41,6 +43,10 @@ fn main() -> ExitCode {
                 }
                 Command::Exit(_) | Command::Other => {
                     println!("{}: command not found", input.trim_end());
+                    io::stdout().flush().unwrap();
+                }
+                Command::Echo(arg) => {
+                    println!("{}", arg);
                     io::stdout().flush().unwrap();
                 }
             },

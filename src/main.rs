@@ -1,12 +1,18 @@
-#[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{fmt, process::ExitCode};
+use std::{env, fmt, fs, process::ExitCode};
 
+#[derive(Debug)]
 enum Command {
     Exit(u8),
     Echo(String),
-    Type(Result<String, String>),
+    Type(Result<PathAndType, String>),
     Invalid(String),
+}
+
+#[derive(Debug)]
+struct PathAndType {
+    path: Option<String>,
+    command: String,
 }
 
 impl fmt::Display for Command {
@@ -21,10 +27,12 @@ impl fmt::Display for Command {
 }
 
 impl Command {
-    fn try_parse(input_parts: &[&str]) -> Result<Self, InvalidCommand> {
+    fn try_parse(input_parts: &[&str]) -> Result<Self, ShellErrors> {
         match input_parts {
             ["exit", code] => {
-                let code = code.parse::<u8>().map_err(|_| InvalidCommand)?;
+                let code = code
+                    .parse::<u8>()
+                    .map_err(|_| ShellErrors::TypeInvalidCommand)?;
                 Ok(Self::Exit(code))
             }
             // to help `Type` command
@@ -32,20 +40,95 @@ impl Command {
             ["echo", arg @ ..] => Ok(Self::Echo(arg.join(" "))),
             ["type", arg @ ..] => {
                 let arg = Self::try_parse(arg);
-                match arg {
+                match &arg {
                     Ok(command) => match command {
-                        Command::Invalid(invalid_type) => return Ok(Self::Type(Err(invalid_type))),
-                        _ => return Ok(Self::Type(Ok(command.to_string()))),
+                        Command::Invalid(_invalid_type) => {
+                            // maybe it's in the path env var
+                            ()
+                        }
+                        _ => {
+                            return Ok(Self::Type(Ok(PathAndType {
+                                path: None,
+                                command: command.to_string(),
+                            })))
+                        }
                     },
-                    Err(_) => return Err(InvalidCommand),
+                    Err(_) => return Err(ShellErrors::TypeInvalidCommand),
                 }
+                if let Ok(path) = env::var("PATH") {
+                    match Command::find_in_user_paths(path, &arg) {
+                        Ok(command) => {
+                            return Ok(command);
+                        }
+                        Err(err) => match err {
+                            ShellErrors::TypeInvalidCommand => return Err(err),
+                            ShellErrors::FileNotFoundInPath | ShellErrors::InvalidCommand => {
+                                return Ok(Self::Type(Err(arg.unwrap().to_string())));
+                            }
+                        },
+                    }
+                }
+                unreachable!("assume user always have env var $PATH")
             }
             _ => Ok(Self::Invalid(input_parts.join(" "))),
         }
     }
+
+    fn find_in_user_paths(
+        path: String,
+        arg: &Result<Command, ShellErrors>,
+    ) -> Result<Self, ShellErrors> {
+        for path_part in path.split(':') {
+            for entry in
+                fs::read_dir(path_part).map_err(|_e| return ShellErrors::FileNotFoundInPath)?
+            {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if let Some(command_file) = path.file_name() {
+                    match arg {
+                        Ok(ref command) => match &command {
+                            Command::Invalid(_invalid_type) => {
+                                if command.to_string() == command_file.to_str().unwrap().to_string()
+                                {
+                                    return Ok(Self::Type(Ok(PathAndType {
+                                        path: Some(path.to_str().unwrap().to_owned()),
+                                        command: command.to_string(),
+                                    })));
+                                }
+                                continue;
+                            }
+                            _ => {
+                                if command.to_string() == command_file.to_str().unwrap().to_string()
+                                {
+                                    return Ok(Self::Type(Ok(PathAndType {
+                                        path: Some(path.to_str().unwrap().to_owned()),
+                                        command: command.to_string(),
+                                    })));
+                                } else {
+                                    continue;
+                                }
+                            }
+                        },
+                        Err(_) => {
+                            return Err(ShellErrors::TypeInvalidCommand);
+                        }
+                    }
+                }
+            }
+        }
+        return Err(ShellErrors::InvalidCommand);
+    }
 }
 
-struct InvalidCommand;
+#[derive(thiserror::Error, Debug)]
+enum ShellErrors {
+    #[error("not found")]
+    TypeInvalidCommand,
+    #[error("didn't find the file")]
+    FileNotFoundInPath,
+    #[error("invliad commandz")]
+    InvalidCommand,
+}
 
 fn main() -> ExitCode {
     loop {
@@ -75,7 +158,12 @@ fn main() -> ExitCode {
                 Command::Type(arg) => {
                     match arg {
                         Ok(valid_type) => {
-                            println!("{} is a shell builtin", valid_type);
+                            let PathAndType { path, command } = valid_type;
+                            if let Some(path) = path {
+                                println!("{} is {}", command, path);
+                            } else {
+                                println!("{} is a shell builtin", command);
+                            }
                         }
                         Err(invalid_type) => {
                             println!("{}: not found", invalid_type);

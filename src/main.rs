@@ -1,8 +1,8 @@
 mod command;
 
-use command::Command;
+use command::MyShellCommand;
 use std::io::{self, Write};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
     loop {
@@ -14,17 +14,17 @@ fn main() -> ExitCode {
 
         let input_parts: Vec<_> = input.split_whitespace().collect();
 
-        let command = Command::try_parse(&input_parts);
+        let command = MyShellCommand::try_parse(&input_parts);
 
         match command {
-            Command::Exit(0) => {
+            MyShellCommand::Exit(0) => {
                 return ExitCode::SUCCESS;
             }
-            Command::Echo(arg) => {
+            MyShellCommand::Echo(arg) => {
                 println!("{}", arg);
                 io::stdout().flush().unwrap();
             }
-            Command::Type(arg) => {
+            MyShellCommand::Type(arg) => {
                 match arg {
                     Ok(command::PathAndType { path, command }) => {
                         if let Some(path) = path {
@@ -39,7 +39,30 @@ fn main() -> ExitCode {
                 }
                 io::stdout().flush().unwrap();
             }
-            Command::Exit(_) | Command::Invalid(_) => {
+            MyShellCommand::ExternalProgram(external_program) => {
+                // dbg!("external!!");
+                // dbg!(&external_program);
+                // Command::new(external_program.name)
+                //     .args(external_program.args)
+                //     .spawn()
+                //     .unwrap()
+                //     .wait()
+                //     .unwrap();
+                match Command::new(external_program.name)
+                    .args(external_program.args)
+                    .spawn()
+                {
+                    Ok(mut command) => {
+                        command.wait().unwrap();
+                    }
+                    Err(_) => {
+                        println!("{}: command not found", input.trim_end());
+                        io::stdout().flush().unwrap();
+                    }
+                };
+                // io::stdout().flush().unwrap();
+            }
+            MyShellCommand::Exit(_) | MyShellCommand::Invalid(_) => {
                 println!("{}: command not found", input.trim_end());
                 io::stdout().flush().unwrap();
             }

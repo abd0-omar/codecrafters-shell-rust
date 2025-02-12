@@ -38,34 +38,16 @@ impl MyShellCommand {
             // to help `Type` command
             ["exit"] => Self::Exit(42),
             ["echo", arg @ ..] => Self::Echo(arg.join(" ")),
-            ["type", arg @ ..] => {
-                // dbg!(went_to_type);
-                return Self::parse_type(arg);
-            }
-            // _ => Self::Invalid(input_parts.join(" ")),
+            ["type", arg @ ..] => Self::parse_type(arg),
             [arg @ ..] => Self::parse_external_programs(arg),
-            // _ => Self::Invalid(input_parts.join(" ")),
         }
     }
 
     fn parse_external_programs(arg: &[&str]) -> Self {
-        // dbg!(went_to_type);
-        // dbg!("in parse_external_programs");
-        // dbg!(&arg);
         if let Ok(path) = env::var("PATH") {
             if let Some(program_name) = arg.first() {
-                // dbg!(program_name);
-                MyShellCommand::find_in_user_paths_2(&path, program_name, arg).unwrap_or_else(
-                    |_| {
-                        // dbg!("ana feen");
-                        // return Self::Invalid(arg.join(" "));
-                        // return Self::Type(Err(program_name.to_string()));
-                        return Self::ExternalProgram(ExternalProgramNameAndArgs {
-                            name: program_name.to_string(),
-                            args: arg.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
-                        });
-                    },
-                )
+                MyShellCommand::locate_command_in_paths(&path, program_name, arg)
+                    .unwrap_or_else(|_| Self::Invalid(arg.join(" ")))
             } else {
                 Self::Invalid(arg.join(" "))
             }
@@ -82,43 +64,35 @@ impl MyShellCommand {
 
     fn parse_type(arg: &[&str]) -> Self {
         let command = Self::try_parse(arg);
-        // dbg!("went in parse_type");
-        // dbg!(&command.to_string());
         match &command {
             MyShellCommand::Invalid(_) | MyShellCommand::ExternalProgram(_) => {
                 // maybe it's in the path env var
                 if let Ok(path) = env::var("PATH") {
-                    MyShellCommand::find_in_user_paths(&path, &command.to_string())
+                    MyShellCommand::locate_command_type_in_paths(&path, &command.to_string())
                         .unwrap_or_else(|_| Self::Type(Err(command.to_string())))
                 } else {
                     Self::Invalid(command.to_string())
                 }
             }
             // built-in shell command
-            _ => {
-                return Self::Type(Ok(PathAndType {
-                    path: None,
-                    command: command.to_string(),
-                }));
-            }
+            _ => Self::Type(Ok(PathAndType {
+                path: None,
+                command: command.to_string(),
+            })),
         }
     }
 
-    pub fn find_in_user_paths_2(path: &str, name: &str, arg: &[&str]) -> Result<Self, ShellErrors> {
-        // dbg!("in find_in_user_paths_2 fn");
+    pub fn locate_command_in_paths(
+        path: &str,
+        name: &str,
+        arg: &[&str],
+    ) -> Result<Self, ShellErrors> {
         for path_part in path.split(':') {
             for entry in fs::read_dir(path_part).map_err(|_| ShellErrors::FileNotFoundInPath)? {
                 let entry = entry.unwrap();
                 let path = entry.path();
                 if let Some(command_file) = path.file_name() {
                     if name == command_file.to_str().unwrap() {
-                        // dbg!(&arg);
-                        // dbg!(&command_file.to_str().unwrap());
-                        // return Ok(Self::Type(Ok(PathAndType {
-                        //     path: Some(path.to_str().unwrap().to_owned()),
-                        //     command: arg.to_owned(),
-                        // })));
-                        // return Ok(Self::Invalid(arg.to_string()));
                         return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
                             name: name.to_owned(),
                             args: arg
@@ -135,15 +109,13 @@ impl MyShellCommand {
         Err(ShellErrors::NoFilesInPATH)
     }
 
-    pub fn find_in_user_paths(path: &str, arg: &str) -> Result<Self, ShellErrors> {
+    pub fn locate_command_type_in_paths(path: &str, arg: &str) -> Result<Self, ShellErrors> {
         for path_part in path.split(':') {
             for entry in fs::read_dir(path_part).map_err(|_| ShellErrors::FileNotFoundInPath)? {
                 let entry = entry.unwrap();
                 let path = entry.path();
                 if let Some(command_file) = path.file_name() {
                     if arg == command_file.to_str().unwrap() {
-                        // dbg!(&arg);
-                        // dbg!(&command_file.to_str().unwrap());
                         return Ok(Self::Type(Ok(PathAndType {
                             path: Some(path.to_str().unwrap().to_owned()),
                             command: arg.to_owned(),

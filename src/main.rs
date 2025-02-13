@@ -12,16 +12,24 @@ fn main() -> ExitCode {
         let mut input = String::new();
         stdin.read_line(&mut input).unwrap();
 
-        let input_parts: Vec<_> = input.split_whitespace().collect();
-
-        let command = MyShellCommand::try_parse(&input_parts);
+        let command = MyShellCommand::try_parse(&input);
 
         match command {
             MyShellCommand::Exit(0) => {
                 return ExitCode::SUCCESS;
             }
             MyShellCommand::Echo(arg) => {
-                println!("{}", arg);
+                match arg {
+                    Ok(arg) => {
+                        println!("{}", arg);
+                    }
+                    Err(misplaced_quotes) => {
+                        println!(
+                            "wrong quotes pos: {}, use --help, or seek some",
+                            misplaced_quotes
+                        );
+                    }
+                }
                 io::stdout().flush().unwrap();
             }
             MyShellCommand::Type(arg) => {
@@ -40,14 +48,6 @@ fn main() -> ExitCode {
                 io::stdout().flush().unwrap();
             }
             MyShellCommand::ExternalProgram(external_program) => {
-                // dbg!("external!!");
-                // dbg!(&external_program);
-                // Command::new(external_program.name)
-                //     .args(external_program.args)
-                //     .spawn()
-                //     .unwrap()
-                //     .wait()
-                //     .unwrap();
                 match Command::new(external_program.name)
                     .args(external_program.args)
                     .spawn()
@@ -60,7 +60,6 @@ fn main() -> ExitCode {
                         io::stdout().flush().unwrap();
                     }
                 };
-                // io::stdout().flush().unwrap();
             }
             MyShellCommand::Exit(_) | MyShellCommand::Invalid(_) => {
                 println!("{}: command not found", input.trim_end());

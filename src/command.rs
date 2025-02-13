@@ -2,7 +2,7 @@ use std::{env, fmt, fs};
 
 pub enum MyShellCommand {
     Exit(u8),
-    Echo(String),
+    Echo(Result<String, String>),
     Type(Result<PathAndType, String>),
     ExternalProgram(ExternalProgramNameAndArgs),
     Invalid(String),
@@ -32,21 +32,78 @@ impl fmt::Display for MyShellCommand {
 }
 
 impl MyShellCommand {
-    pub fn try_parse(input_parts: &[&str]) -> Self {
-        match input_parts {
+    pub fn try_parse(input: &str) -> Self {
+        let input_parts: Vec<_> = input.split_whitespace().collect();
+
+        match input_parts.as_slice() {
             ["exit", code] => Self::parse_exit(code),
             // to help `Type` command
             ["exit"] => Self::Exit(42),
-            ["echo", arg @ ..] => Self::Echo(arg.join(" ")),
-            ["type", arg @ ..] => Self::parse_type(arg),
-            [arg @ ..] => Self::parse_external_programs(arg),
+            ["echo", ref arg @ ..] => Self::parse_echo(arg, input),
+            ["type", ref arg @ ..] => Self::parse_type(arg),
+            [ref arg @ ..] => Self::parse_external_programs(arg, input),
+        }
+    }
+    fn parse_echo(arg: &[&str], input: &str) -> Self {
+        let arg = arg.join(" ");
+        // it could not start with '\'' and end with '\\\'' and still be valid,
+        // leave today's work for tomorrow
+        if arg.starts_with('\'') && !arg.ends_with('\'')
+            || !arg.starts_with('\'') && arg.ends_with('\'')
+        {
+            Self::Echo(Err(arg))
+        } else if arg.starts_with('\'') && arg.ends_with('\'') {
+            Self::Echo(Ok(Self::single_quotes_parser(input).join(" ")))
+        } else {
+            Self::Echo(Ok(arg))
         }
     }
 
-    fn parse_external_programs(arg: &[&str]) -> Self {
+    fn single_quotes_parser(input: &str) -> Vec<String> {
+        // handle quote in the middle
+        // r#"
+        // 'it\'s me"
+        // #
+        let mut result: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut chars = input.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' => {
+                    if let Some(next_char) = chars.next() {
+                        current.push(next_char);
+                    }
+                }
+                '\'' => {
+                    if let Some(&next_char) = chars.peek() {
+                        if next_char == '\'' {
+                            chars.next();
+                            continue;
+                        }
+                    }
+                    if in_quotes {
+                        result.push(current.clone());
+                        current.clear();
+                    }
+                    in_quotes = !in_quotes;
+                }
+                _ => {
+                    if in_quotes {
+                        current.push(ch);
+                    }
+                }
+            }
+        }
+
+        // if !cur.is_empty, you could add it to result
+        result
+    }
+
+    fn parse_external_programs(arg: &[&str], input: &str) -> Self {
         if let Ok(path) = env::var("PATH") {
             if let Some(program_name) = arg.first() {
-                MyShellCommand::locate_command_in_paths(&path, program_name, arg)
+                MyShellCommand::locate_command_in_paths(&path, program_name, arg, input)
                     .unwrap_or_else(|_| Self::Invalid(arg.join(" ")))
             } else {
                 Self::Invalid(arg.join(" "))
@@ -63,7 +120,7 @@ impl MyShellCommand {
     }
 
     fn parse_type(arg: &[&str]) -> Self {
-        let command = Self::try_parse(arg);
+        let command = Self::try_parse(&arg.join(" "));
         match &command {
             MyShellCommand::Invalid(_) | MyShellCommand::ExternalProgram(_) => {
                 // maybe it's in the path env var
@@ -86,6 +143,7 @@ impl MyShellCommand {
         path: &str,
         name: &str,
         arg: &[&str],
+        input: &str,
     ) -> Result<Self, ShellErrors> {
         for path_part in path.split(':') {
             for entry in fs::read_dir(path_part).map_err(|_| ShellErrors::FileNotFoundInPath)? {
@@ -93,6 +151,17 @@ impl MyShellCommand {
                 let path = entry.path();
                 if let Some(command_file) = path.file_name() {
                     if name == command_file.to_str().unwrap() {
+                        if name == "cat" {
+                            let input_without_cat = input.strip_prefix("cat").unwrap().trim();
+                            if input_without_cat.starts_with('\'')
+                                && input_without_cat.ends_with('\'')
+                            {
+                                return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
+                                    name: name.to_owned(),
+                                    args: Self::single_quotes_parser(input_without_cat),
+                                }));
+                            }
+                        }
                         return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
                             name: name.to_owned(),
                             args: arg

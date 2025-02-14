@@ -48,7 +48,9 @@ impl MyShellCommand {
         let arg = arg.join(" ");
         // it could not start with '\'' and end with '\\\'' and still be valid,
         // leave today's work for tomorrow
-        if arg.starts_with('\'') && !arg.ends_with('\'')
+        if arg.starts_with('"') && arg.ends_with('"') {
+            Self::Echo(Ok(Self::double_quotes_parser(input).join(" ")))
+        } else if arg.starts_with('\'') && !arg.ends_with('\'')
             || !arg.starts_with('\'') && arg.ends_with('\'')
         {
             Self::Echo(Err(arg))
@@ -57,6 +59,63 @@ impl MyShellCommand {
         } else {
             Self::Echo(Ok(arg))
         }
+    }
+
+    fn double_quotes_parser(input: &str) -> Vec<String> {
+        // handle quote in the middle
+        // r#"
+        // 'it\'s me"
+        // #
+        let mut result: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut chars = input.chars().peekable();
+        // $HOME -> /home/abdo
+        // \$ -> $
+        // \" -> "
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' => {
+                    if let Some(&next_char) = chars.peek() {
+                        match next_char {
+                            '$' | '\\' | '"' => {
+                                current.push(chars.next().unwrap());
+                            }
+                            _ => {
+                                // leave this case for later
+                                current.push(chars.next().unwrap())
+                            }
+                        }
+                    } else {
+                        // leave this case for later
+                    }
+                }
+                '"' => {
+                    if let Some(&next_char) = chars.peek() {
+                        if next_char == '"' {
+                            chars.next();
+                            continue;
+                        }
+                    }
+                    if in_quotes {
+                        result.push(current.clone());
+                        current.clear();
+                    }
+                    in_quotes = !in_quotes;
+                }
+                // case for $, to work as $HOME -> home/abdo
+                // also leave it for later
+                // $ => todo!(),
+                _ => {
+                    if in_quotes {
+                        current.push(ch);
+                    }
+                }
+            }
+        }
+
+        // if !cur.is_empty, you could add it to result
+        result
     }
 
     fn single_quotes_parser(input: &str) -> Vec<String> {
@@ -153,6 +212,14 @@ impl MyShellCommand {
                     if name == command_file.to_str().unwrap() {
                         if name == "cat" {
                             let input_without_cat = input.strip_prefix("cat").unwrap().trim();
+                            if input_without_cat.starts_with('"')
+                                && input_without_cat.ends_with('"')
+                            {
+                                return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
+                                    name: name.to_owned(),
+                                    args: Self::double_quotes_parser(input_without_cat),
+                                }));
+                            }
                             if input_without_cat.starts_with('\'')
                                 && input_without_cat.ends_with('\'')
                             {

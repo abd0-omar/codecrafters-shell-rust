@@ -45,19 +45,37 @@ impl MyShellCommand {
         }
     }
     fn parse_echo(arg: &[&str], input: &str) -> Self {
-        let arg = arg.join(" ");
-        // it could not start with '\'' and end with '\\\'' and still be valid,
-        // leave today's work for tomorrow
-        if arg.starts_with('"') && arg.ends_with('"') {
+        let arg_joined = arg.join(" ");
+        if arg_joined.starts_with('"') && arg_joined.ends_with('"') {
             Self::Echo(Ok(Self::double_quotes_parser(input).join(" ")))
-        } else if arg.starts_with('\'') && !arg.ends_with('\'')
-            || !arg.starts_with('\'') && arg.ends_with('\'')
-        {
-            Self::Echo(Err(arg))
-        } else if arg.starts_with('\'') && arg.ends_with('\'') {
+        } else if arg_joined.starts_with('\'') && arg_joined.ends_with('\'') {
             Self::Echo(Ok(Self::single_quotes_parser(input).join(" ")))
         } else {
-            Self::Echo(Ok(arg))
+            let mut chars = input.chars().skip(5).peekable();
+            let mut result = Vec::new();
+            let mut cur = String::new();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '\\' => {
+                        if let Some(&next_ch) = chars.peek() {
+                            if next_ch.is_ascii_whitespace() {
+                                cur.push(' ');
+                                chars.next();
+                            }
+                        }
+                    }
+                    ' ' => {
+                        result.push(cur.clone());
+                        cur.clear();
+                    }
+                    _ => {
+                        cur.push(ch);
+                    }
+                }
+            }
+            result.push(cur.trim().to_string());
+            result.retain(|word| !word.is_empty());
+            Self::Echo(Ok(result.to_owned().join(" ")))
         }
     }
 
@@ -78,11 +96,12 @@ impl MyShellCommand {
                 '\\' => {
                     if let Some(&next_char) = chars.peek() {
                         match next_char {
-                            '$' | '\\' | '"' => {
+                            '$' | '"' => {
                                 current.push(chars.next().unwrap());
                             }
                             _ => {
                                 // leave this case for later
+                                current.push('\\');
                                 current.push(chars.next().unwrap())
                             }
                         }
@@ -155,7 +174,6 @@ impl MyShellCommand {
             }
         }
 
-        // if !cur.is_empty, you could add it to result
         result
     }
 
@@ -228,6 +246,29 @@ impl MyShellCommand {
                                     args: Self::single_quotes_parser(input_without_cat),
                                 }));
                             }
+
+                            // handle "\" case
+                            let mut chars = input.chars().skip(4).peekable();
+                            let mut result = String::new();
+                            while let Some(ch) = chars.next() {
+                                match ch {
+                                    '\\' => {
+                                        if let Some(&next_ch) = chars.peek() {
+                                            if next_ch.is_ascii_whitespace() {
+                                                result.push(' ');
+                                                chars.next();
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        result.push(ch);
+                                    }
+                                }
+                            }
+                            return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
+                                name: name.to_owned(),
+                                args: vec![result.trim().to_string()],
+                            }));
                         }
                         return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
                             name: name.to_owned(),

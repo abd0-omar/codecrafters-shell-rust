@@ -44,6 +44,7 @@ impl MyShellCommand {
             [ref arg @ ..] => Self::parse_external_programs(arg, input),
         }
     }
+
     fn parse_echo(arg: &[&str], input: &str) -> Self {
         let arg_joined = arg.join(" ");
         if arg_joined.starts_with('"') && arg_joined.ends_with('"') {
@@ -149,8 +150,16 @@ impl MyShellCommand {
         while let Some(ch) = chars.next() {
             match ch {
                 '\\' => {
+                    // consumed the next char
                     if let Some(next_char) = chars.next() {
-                        current.push(next_char);
+                        match next_char {
+                            '\"' => {
+                                current.push_str(r#"\""#);
+                            }
+                            _ => {
+                                current.push(next_char);
+                            }
+                        }
                     }
                 }
                 '\'' => {

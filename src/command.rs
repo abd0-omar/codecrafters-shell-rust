@@ -88,7 +88,13 @@ impl MyShellCommand {
         let mut result: Vec<String> = Vec::new();
         let mut current = String::new();
         let mut in_quotes = false;
-        let mut chars = input.chars().peekable();
+        let mut skip_count = 0;
+        if input.starts_with("echo") {
+            skip_count = 5;
+        } else if input.starts_with("cat") {
+            skip_count = 3;
+        }
+        let mut chars = input.chars().skip(skip_count).peekable();
         // $HOME -> /home/abdo
         // \$ -> $
         // \" -> "
@@ -97,7 +103,7 @@ impl MyShellCommand {
                 '\\' => {
                     if let Some(&next_char) = chars.peek() {
                         match next_char {
-                            '$' | '"' => {
+                            '$' | '"' | '\\' => {
                                 current.push(chars.next().unwrap());
                             }
                             _ => {
@@ -118,7 +124,7 @@ impl MyShellCommand {
                         }
                     }
                     if in_quotes {
-                        result.push(current.clone());
+                        result.push(current.clone().trim().to_string());
                         current.clear();
                     }
                     in_quotes = !in_quotes;
@@ -127,14 +133,17 @@ impl MyShellCommand {
                 // also leave it for later
                 // $ => todo!(),
                 _ => {
-                    if in_quotes {
-                        current.push(ch);
-                    }
+                    current.push(ch);
                 }
             }
         }
 
         // if !cur.is_empty, you could add it to result
+        if !current.is_empty() {
+            if let Some(last) = result.last_mut() {
+                last.push_str(&current.trim());
+            }
+        }
         result
     }
 
@@ -149,19 +158,9 @@ impl MyShellCommand {
         let mut chars = input.chars().peekable();
         while let Some(ch) = chars.next() {
             match ch {
-                '\\' => {
-                    // consumed the next char
-                    if let Some(next_char) = chars.next() {
-                        match next_char {
-                            '\"' => {
-                                current.push_str(r#"\""#);
-                            }
-                            _ => {
-                                current.push(next_char);
-                            }
-                        }
-                    }
-                }
+                // '\\' => {
+                //     // don't care about it here, only matters in double quotes
+                // }
                 '\'' => {
                     if let Some(&next_char) = chars.peek() {
                         if next_char == '\'' {

@@ -19,17 +19,7 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             MyShellCommand::Echo(arg) => {
-                match arg {
-                    Ok(arg) => {
-                        println!("{}", arg);
-                    }
-                    Err(misplaced_quotes) => {
-                        println!(
-                            "wrong quotes pos: {}, use --help, or seek some",
-                            misplaced_quotes
-                        );
-                    }
-                }
+                println!("{}", arg);
                 io::stdout().flush().unwrap();
             }
             MyShellCommand::Type(arg) => {

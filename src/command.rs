@@ -2,7 +2,7 @@ use std::{env, fmt, fs};
 
 pub enum MyShellCommand {
     Exit(u8),
-    Echo(Result<String, String>),
+    Echo(String),
     Type(Result<PathAndType, String>),
     ExternalProgram(ExternalProgramNameAndArgs),
     Invalid(String),
@@ -33,24 +33,50 @@ impl fmt::Display for MyShellCommand {
 
 impl MyShellCommand {
     pub fn try_parse(input: &str) -> Self {
-        let input_parts: Vec<_> = input.split_whitespace().collect();
+        let program_name = if input.starts_with('\'') {
+            Some(Self::single_quotes_parser(input)[0].clone())
+        } else if input.starts_with('\"') {
+            Some(Self::double_quotes_parser(input, true)[0].clone())
+        } else {
+            None
+        };
+        let program_name_clone = program_name.clone();
+        let input_parts: Vec<_> = if let Some(program_name) = program_name {
+            let input = &input[2 + program_name.len()..];
+            input.split_whitespace().collect()
+        } else {
+            input.split_whitespace().collect()
+        };
+        let path_env = env::var("PATH").ok();
 
         match input_parts.as_slice() {
             ["exit", code] => Self::parse_exit(code),
             // to help `Type` command
             ["exit"] => Self::Exit(42),
             ["echo", ref arg @ ..] => Self::parse_echo(arg, input),
-            ["type", ref arg @ ..] => Self::parse_type(arg),
-            [ref arg @ ..] => Self::parse_external_programs(arg, input),
+            ["type", ref arg @ ..] => Self::parse_type(arg, &path_env),
+            [ref arg @ ..] => {
+                if let Some(program_name_str) = program_name_clone {
+                    let mut new_arg = vec![program_name_str.as_str()];
+                    new_arg.extend_from_slice(arg);
+                    Self::parse_external_programs(
+                        &new_arg,
+                        input_parts.join(" ").as_str(),
+                        &path_env,
+                    )
+                } else {
+                    Self::parse_external_programs(&arg, input, &path_env)
+                }
+            }
         }
     }
 
     fn parse_echo(arg: &[&str], input: &str) -> Self {
         let arg_joined = arg.join(" ");
         if arg_joined.starts_with('"') && arg_joined.ends_with('"') {
-            Self::Echo(Ok(Self::double_quotes_parser(input).join(" ")))
+            Self::Echo(Self::double_quotes_parser(input, false).join(" "))
         } else if arg_joined.starts_with('\'') && arg_joined.ends_with('\'') {
-            Self::Echo(Ok(Self::single_quotes_parser(input).join(" ")))
+            Self::Echo(Self::single_quotes_parser(input).join(" "))
         } else {
             let mut chars = input.chars().skip(5).peekable();
             let mut result = Vec::new();
@@ -76,11 +102,11 @@ impl MyShellCommand {
             }
             result.push(cur.trim().to_string());
             result.retain(|word| !word.is_empty());
-            Self::Echo(Ok(result.to_owned().join(" ")))
+            Self::Echo(result.to_owned().join(" "))
         }
     }
 
-    fn double_quotes_parser(input: &str) -> Vec<String> {
+    fn double_quotes_parser(input: &str, exteranl: bool) -> Vec<String> {
         // handle quote in the middle
         // r#"
         // 'it\'s me"
@@ -139,6 +165,9 @@ impl MyShellCommand {
         }
 
         // if !cur.is_empty, you could add it to result
+        if exteranl {
+            return result;
+        }
         if !current.is_empty() {
             if let Some(last) = result.last_mut() {
                 last.push_str(&current.trim());
@@ -185,8 +214,8 @@ impl MyShellCommand {
         result
     }
 
-    fn parse_external_programs(arg: &[&str], input: &str) -> Self {
-        if let Ok(path) = env::var("PATH") {
+    fn parse_external_programs(arg: &[&str], input: &str, path: &Option<String>) -> Self {
+        if let Some(path) = path {
             if let Some(program_name) = arg.first() {
                 MyShellCommand::locate_command_in_paths(&path, program_name, arg, input)
                     .unwrap_or_else(|_| Self::Invalid(arg.join(" ")))
@@ -204,12 +233,12 @@ impl MyShellCommand {
             .unwrap_or_else(|_| Self::Invalid(format!("Invalid exit code: {}", code)))
     }
 
-    fn parse_type(arg: &[&str]) -> Self {
+    fn parse_type(arg: &[&str], path: &Option<String>) -> Self {
         let command = Self::try_parse(&arg.join(" "));
         match &command {
             MyShellCommand::Invalid(_) | MyShellCommand::ExternalProgram(_) => {
                 // maybe it's in the path env var
-                if let Ok(path) = env::var("PATH") {
+                if let Some(path) = path {
                     MyShellCommand::locate_command_type_in_paths(&path, &command.to_string())
                         .unwrap_or_else(|_| Self::Type(Err(command.to_string())))
                 } else {
@@ -243,7 +272,7 @@ impl MyShellCommand {
                             {
                                 return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
                                     name: name.to_owned(),
-                                    args: Self::double_quotes_parser(input_without_cat),
+                                    args: Self::double_quotes_parser(input_without_cat, false),
                                 }));
                             }
                             if input_without_cat.starts_with('\'')

@@ -111,6 +111,9 @@ fn read_line_with_tab_detection(
                         line = format!("{} ", words[0].clone());
                         print!("$ {}", line);
                         io::stdout().flush().unwrap();
+                    } else {
+                        print!("\x07");
+                        io::stdout().flush().unwrap();
                     }
                 }
                 KeyCode::Backspace => {

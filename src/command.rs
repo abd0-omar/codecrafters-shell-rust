@@ -1,4 +1,4 @@
-use std::{env, fmt, fs};
+use std::{collections::HashMap, env, fmt, fs};
 
 pub enum MyShellCommand {
     Exit(u8),
@@ -349,4 +349,54 @@ pub enum ShellErrors {
     FileNotFoundInPath,
     #[error("No executable files were found in $PATH")]
     NoFilesInPATH,
+}
+
+#[derive(Debug)]
+pub struct Trie {
+    pub child: HashMap<char, Trie>,
+    is_leaf: bool,
+}
+
+impl Trie {
+    pub fn new() -> Self {
+        Self {
+            child: HashMap::new(),
+            is_leaf: false,
+        }
+    }
+
+    pub fn insert(&mut self, word: &str) {
+        let mut trie = self;
+        for letter in word.chars() {
+            trie = trie.child.entry(letter).or_insert(Trie::new());
+        }
+        trie.is_leaf = true;
+    }
+
+    pub fn get_words_with_prefix(&self, prefix: &str) -> Vec<String> {
+        let mut trie = self;
+        let mut results = Vec::new();
+        for letter in prefix.chars() {
+            if let Some(child) = trie.child.get(&letter) {
+                trie = child;
+            } else {
+                return results;
+            }
+        }
+        dfs(trie, prefix.to_owned(), &mut results);
+        results
+    }
+}
+
+fn dfs(trie: &Trie, word: String, results: &mut Vec<String>) {
+    if trie.is_leaf {
+        results.push(word.clone());
+        return;
+    }
+
+    for (letter, child) in &trie.child {
+        let mut new_word = word.clone();
+        new_word.push(*letter);
+        dfs(child, new_word, results);
+    }
 }

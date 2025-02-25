@@ -7,19 +7,36 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
-use std::io::{self, StdoutLock, Write};
-use std::process::{Command, ExitCode};
+use std::{
+    fs,
+    process::{Command, ExitCode},
+};
+use std::{
+    io::{self, StdoutLock, Write},
+    process,
+};
+
+fn initialize_trie(trie: &mut Trie) {
+    // could be added to a sqlite db
+    for path in std::env::var("PATH").unwrap_or_default().split(':') {
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.filter_map(Result::ok) {
+                if let Some(command_file) = entry.file_name().to_str() {
+                    trie.insert(command_file);
+                }
+            }
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let mut trie = Trie::new();
+    initialize_trie(&mut trie);
 
     loop {
         enable_raw_mode().unwrap();
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
-        // could be added to a sqlite db
-        trie.insert("echo");
-        trie.insert("exit");
 
         let input = match read_line_with_tab_detection(&mut stdout, &mut trie) {
             Ok(line) => line,
@@ -78,42 +95,61 @@ fn read_line_with_tab_detection(
     stdout: &mut StdoutLock<'static>,
     trie: &mut Trie,
 ) -> io::Result<String> {
-    enable_raw_mode().unwrap(); // Keep raw mode enabled
+    enable_raw_mode()?;
     let mut line = String::new();
 
     print!("$ ");
-    io::stdout().flush().unwrap();
+    io::stdout().flush()?;
+
+    let mut first_tab = false;
 
     loop {
         if let Event::Key(key_event) = event::read()? {
             match key_event {
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('j'),
+                    code: KeyCode::Char(c),
                     ..
-                } => {
-                    print!("\r\n");
-                    io::stdout().flush().unwrap();
-                    break;
-                }
+                } => match c {
+                    'j' => {
+                        print!("\r\n");
+                        io::stdout().flush()?;
+                        break;
+                    }
+                    'c' => {
+                        disable_raw_mode()?;
+                        process::exit(0);
+                    }
+                    _ => (),
+                },
                 _ => (),
             }
             match key_event.code {
                 KeyCode::Enter => {
                     print!("\r\n");
-                    io::stdout().flush().unwrap();
+                    io::stdout().flush()?;
                     break;
                 }
                 KeyCode::Tab => {
                     let words = trie.get_words_with_prefix(&line);
-                    if !words.is_empty() {
-                        execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine)).unwrap();
+                    dbg!("{:?}", &words);
+                    dbg!(&first_tab);
+                    if words.len() == 1 {
+                        execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
                         line = format!("{} ", words[0].clone());
                         print!("$ {}", line);
-                        io::stdout().flush().unwrap();
+                        io::stdout().flush()?;
                     } else {
-                        print!("\x07");
-                        io::stdout().flush().unwrap();
+                        if first_tab {
+                            if !words.is_empty() {
+                                dbg!("{:?}", words);
+                            }
+                            first_tab = false;
+                        } else {
+                            first_tab = true;
+                            print!("\x07");
+                            io::stdout().flush()?;
+                        }
                     }
                 }
                 KeyCode::Backspace => {
@@ -121,19 +157,19 @@ fn read_line_with_tab_detection(
                         line.pop();
                         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine)).unwrap();
                         print!("$ {}", line);
-                        io::stdout().flush().unwrap();
+                        io::stdout().flush()?;
                     }
                 }
                 KeyCode::Char(c) => {
                     line.push(c);
                     print!("{}", c);
-                    io::stdout().flush().unwrap();
+                    io::stdout().flush()?;
                 }
                 _ => {}
             }
         }
     }
 
-    disable_raw_mode().unwrap();
+    disable_raw_mode()?;
     Ok(line)
 }

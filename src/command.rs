@@ -391,7 +391,6 @@ impl Trie {
 fn dfs(trie: &Trie, word: String, results: &mut Vec<String>) {
     if trie.is_leaf {
         results.push(word.clone());
-        return;
     }
 
     for (letter, child) in &trie.child {

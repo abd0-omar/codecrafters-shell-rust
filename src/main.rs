@@ -5,6 +5,7 @@ use crossterm::{
     cursor::MoveToColumn,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
+    style::Print,
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use std::{
@@ -27,12 +28,20 @@ fn initialize_trie(trie: &mut Trie) {
             }
         }
     }
+    trie.insert("exit");
 }
 
 fn main() -> ExitCode {
     let mut trie = Trie::new();
     initialize_trie(&mut trie);
 
+    // TODO:
+    // $ cod
+    // outputs only code, without codecrafters for some reason
+    // but
+    // $ codecr
+    // outputs codecrafters and codecreatine
+    // weird
     loop {
         enable_raw_mode().unwrap();
         let stdout = io::stdout();
@@ -131,9 +140,7 @@ fn read_line_with_tab_detection(
                     break;
                 }
                 KeyCode::Tab => {
-                    let words = trie.get_words_with_prefix(&line);
-                    dbg!("{:?}", &words);
-                    dbg!(&first_tab);
+                    let mut words = trie.get_words_with_prefix(&line);
                     if words.len() == 1 {
                         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
                         line = format!("{} ", words[0].clone());
@@ -142,7 +149,17 @@ fn read_line_with_tab_detection(
                     } else {
                         if first_tab {
                             if !words.is_empty() {
-                                dbg!("{:?}", words);
+                                words.sort_unstable();
+                                let words_with_prefix = format!("\r\n{}\r\n", words.join("  "));
+                                let prompt = format!("$ {}", line);
+
+                                execute!(
+                                    stdout,
+                                    Print(words_with_prefix),
+                                    MoveToColumn(0),
+                                    Print(prompt)
+                                )?;
+                                io::stdout().flush()?;
                             }
                             first_tab = false;
                         } else {

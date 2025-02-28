@@ -10,7 +10,7 @@ use std::{
     process,
 };
 
-use crate::command::Trie;
+use crate::trie::Trie;
 
 pub fn read_line_with_tab_detection(
     stdout: &mut StdoutLock<'static>,

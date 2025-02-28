@@ -1,28 +1,13 @@
 mod command;
 mod input_handler;
+mod trie;
 
-use command::{MyShellCommand, Trie};
+use command::MyShellCommand;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use input_handler::read_line_with_tab_detection;
 use std::io::{self, Write};
-use std::{
-    fs,
-    process::{Command, ExitCode},
-};
-
-fn initialize_trie(trie: &mut Trie) {
-    // could be added to a sqlite db
-    for path in std::env::var("PATH").unwrap_or_default().split(':') {
-        if let Ok(entries) = fs::read_dir(path) {
-            for entry in entries.filter_map(Result::ok) {
-                if let Some(command_file) = entry.file_name().to_str() {
-                    trie.insert(command_file);
-                }
-            }
-        }
-    }
-    trie.insert("exit");
-}
+use std::process::{Command, ExitCode};
+use trie::{initialize_trie, Trie};
 
 fn main() -> ExitCode {
     let mut trie = Trie::new();

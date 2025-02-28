@@ -1,11 +1,25 @@
-use std::{env, fmt, fs};
+use crate::utils::{locate_command_in_paths, PathAndType};
+use std::sync::OnceLock;
+use std::{collections::HashSet, env};
 
 pub enum MyShellCommand {
     Exit(u8),
     Echo(String),
     Type(Result<PathAndType, String>),
     ExternalProgram(ExternalProgramNameAndArgs),
-    Invalid(String),
+    Invalid,
+}
+
+static BUILT_IN_COMMANDS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+fn get_built_in_commands() -> &'static HashSet<&'static str> {
+    BUILT_IN_COMMANDS.get_or_init(|| {
+        let mut hs = HashSet::new();
+        hs.insert("exit");
+        hs.insert("echo");
+        hs.insert("type");
+        hs
+    })
 }
 
 #[derive(Debug)]
@@ -14,332 +28,63 @@ pub struct ExternalProgramNameAndArgs {
     pub args: Vec<String>,
 }
 
-pub struct PathAndType {
-    pub path: Option<String>,
-    pub command: String,
-}
-
-impl fmt::Display for MyShellCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MyShellCommand::Exit(_) => write!(f, "exit"),
-            MyShellCommand::Echo(_) => write!(f, "echo"),
-            MyShellCommand::Type(_) => write!(f, "type"),
-            MyShellCommand::ExternalProgram(program_name) => write!(f, "{}", program_name.name),
-            MyShellCommand::Invalid(arg) => write!(f, "{}", arg),
-        }
-    }
-}
-
 impl MyShellCommand {
     pub fn try_parse(input: &str) -> Self {
-        let program_name = if input.starts_with('\'') {
-            Some(Self::single_quotes_parser(input)[0].clone())
-        } else if input.starts_with('\"') {
-            Some(Self::double_quotes_parser(input, true)[0].clone())
-        } else {
-            None
-        };
-        let program_name_clone = program_name.clone();
-        let input_parts: Vec<_> = if let Some(program_name) = program_name {
-            let input = &input[2 + program_name.len()..];
-            input.split_whitespace().collect()
-        } else {
-            input.split_whitespace().collect()
-        };
+        let ShellCommand {
+            name: command_name,
+            args,
+        } = parse_command_args(input);
+
         let path_env = env::var("PATH").ok();
 
-        match input_parts.as_slice() {
-            ["exit", code] => Self::parse_exit(code),
-            // to help `Type` command
-            ["exit"] => Self::Exit(42),
-            ["echo", ref arg @ ..] => Self::parse_echo(arg, input),
-            ["type", ref arg @ ..] => Self::parse_type(arg, &path_env),
-            [ref arg @ ..] => {
-                if let Some(program_name_str) = program_name_clone {
-                    let mut new_arg = vec![program_name_str.as_str()];
-                    new_arg.extend_from_slice(arg);
-                    Self::parse_external_programs(
-                        &new_arg,
-                        input_parts.join(" ").as_str(),
-                        &path_env,
-                    )
-                } else {
-                    Self::parse_external_programs(&arg, input, &path_env)
-                }
-            }
+        match command_name.as_str() {
+            "exit" => Self::parse_exit(&args.first()),
+            "echo" => Self::parse_echo(&args),
+            "type" => Self::parse_type(&args, &path_env),
+            _ => Self::parse_external_programs(&command_name, &args, &path_env),
         }
     }
 
-    fn parse_echo(arg: &[&str], input: &str) -> Self {
-        let arg_joined = arg.join(" ");
-        if arg_joined.starts_with('"') && arg_joined.ends_with('"') {
-            Self::Echo(Self::double_quotes_parser(input, false).join(" "))
-        } else if arg_joined.starts_with('\'') && arg_joined.ends_with('\'') {
-            Self::Echo(Self::single_quotes_parser(input).join(" "))
-        } else {
-            let mut chars = input.chars().skip(5).peekable();
-            let mut result = Vec::new();
-            let mut cur = String::new();
-            while let Some(ch) = chars.next() {
-                match ch {
-                    '\\' => {
-                        if let Some(&next_ch) = chars.peek() {
-                            if next_ch.is_ascii_whitespace() {
-                                cur.push(' ');
-                                chars.next();
-                            }
-                        }
-                    }
-                    ' ' => {
-                        result.push(cur.clone());
-                        cur.clear();
-                    }
-                    _ => {
-                        cur.push(ch);
-                    }
-                }
-            }
-            result.push(cur.trim().to_string());
-            result.retain(|word| !word.is_empty());
-            Self::Echo(result.to_owned().join(" "))
-        }
+    fn parse_echo(args: &[String]) -> Self {
+        Self::Echo(args.join(" "))
     }
 
-    fn double_quotes_parser(input: &str, exteranl: bool) -> Vec<String> {
-        // handle quote in the middle
-        // r#"
-        // 'it\'s me"
-        // #
-        let mut result: Vec<String> = Vec::new();
-        let mut current = String::new();
-        let mut in_quotes = false;
-        let mut skip_count = 0;
-        if input.starts_with("echo") {
-            skip_count = 5;
-        } else if input.starts_with("cat") {
-            skip_count = 3;
-        }
-        let mut chars = input.chars().skip(skip_count).peekable();
-        // $HOME -> /home/abdo
-        // \$ -> $
-        // \" -> "
-        while let Some(ch) = chars.next() {
-            match ch {
-                '\\' => {
-                    if let Some(&next_char) = chars.peek() {
-                        match next_char {
-                            '$' | '"' | '\\' => {
-                                current.push(chars.next().unwrap());
-                            }
-                            _ => {
-                                // leave this case for later
-                                current.push('\\');
-                                current.push(chars.next().unwrap())
-                            }
-                        }
-                    } else {
-                        // leave this case for later
-                    }
-                }
-                '"' => {
-                    if let Some(&next_char) = chars.peek() {
-                        if next_char == '"' {
-                            chars.next();
-                            continue;
-                        }
-                    }
-                    if in_quotes {
-                        result.push(current.clone().trim().to_string());
-                        current.clear();
-                    }
-                    in_quotes = !in_quotes;
-                }
-                // case for $, to work as $HOME -> home/abdo
-                // also leave it for later
-                // $ => todo!(),
-                _ => {
-                    current.push(ch);
-                }
-            }
-        }
-
-        // if !cur.is_empty, you could add it to result
-        if exteranl {
-            return result;
-        }
-        if !current.is_empty() {
-            if let Some(last) = result.last_mut() {
-                last.push_str(&current.trim());
-            }
-        }
-        result
-    }
-
-    fn single_quotes_parser(input: &str) -> Vec<String> {
-        // handle quote in the middle
-        // r#"
-        // 'it\'s me"
-        // #
-        let mut result: Vec<String> = Vec::new();
-        let mut current = String::new();
-        let mut in_quotes = false;
-        let mut chars = input.chars().peekable();
-        while let Some(ch) = chars.next() {
-            match ch {
-                // '\\' => {
-                //     // don't care about it here, only matters in double quotes
-                // }
-                '\'' => {
-                    if let Some(&next_char) = chars.peek() {
-                        if next_char == '\'' {
-                            chars.next();
-                            continue;
-                        }
-                    }
-                    if in_quotes {
-                        result.push(current.clone());
-                        current.clear();
-                    }
-                    in_quotes = !in_quotes;
-                }
-                _ => {
-                    if in_quotes {
-                        current.push(ch);
-                    }
-                }
-            }
-        }
-
-        result
-    }
-
-    fn parse_external_programs(arg: &[&str], input: &str, path: &Option<String>) -> Self {
+    fn parse_external_programs(command_name: &str, args: &[String], path: &Option<String>) -> Self {
         if let Some(path) = path {
-            if let Some(program_name) = arg.first() {
-                MyShellCommand::locate_command_in_paths(&path, program_name, arg, input)
-                    .unwrap_or_else(|_| Self::Invalid(arg.join(" ")))
-            } else {
-                Self::Invalid(arg.join(" "))
-            }
+            locate_command_in_paths(&path, command_name, Some(args))
+                .unwrap_or_else(|_| Self::Invalid)
         } else {
-            Self::Invalid(arg.join(" "))
+            Self::Invalid
         }
     }
 
-    fn parse_exit(code: &str) -> Self {
-        code.parse::<u8>()
-            .map(Self::Exit)
-            .unwrap_or_else(|_| Self::Invalid(format!("Invalid exit code: {}", code)))
+    fn parse_exit(code: &Option<&String>) -> Self {
+        match code.map(|code| {
+            code.parse::<u8>()
+                .map(Self::Exit)
+                .unwrap_or_else(|_| Self::Invalid)
+        }) {
+            Some(command) => command,
+            None => Self::Invalid,
+        }
     }
 
-    fn parse_type(arg: &[&str], path: &Option<String>) -> Self {
-        let command = Self::try_parse(&arg.join(" "));
-        match &command {
-            MyShellCommand::Invalid(_) | MyShellCommand::ExternalProgram(_) => {
-                // maybe it's in the path env var
-                if let Some(path) = path {
-                    MyShellCommand::locate_command_type_in_paths(&path, &command.to_string())
-                        .unwrap_or_else(|_| Self::Type(Err(command.to_string())))
-                } else {
-                    Self::Invalid(command.to_string())
-                }
-            }
-            // built-in shell command
-            _ => Self::Type(Ok(PathAndType {
+    fn parse_type(arg: &[String], path: &Option<String>) -> Self {
+        let command_name = &arg[0];
+
+        if get_built_in_commands().contains(command_name.as_str()) {
+            return Self::Type(Ok(PathAndType {
                 path: None,
-                command: command.to_string(),
-            })),
-        }
-    }
-
-    pub fn locate_command_in_paths(
-        path: &str,
-        name: &str,
-        arg: &[&str],
-        input: &str,
-    ) -> Result<Self, ShellErrors> {
-        for path_part in path.split(':') {
-            for entry in fs::read_dir(path_part).map_err(|_| ShellErrors::FileNotFoundInPath)? {
-                let entry = entry.unwrap();
-                let path = entry.path();
-                if let Some(command_file) = path.file_name() {
-                    if name == command_file.to_str().unwrap() {
-                        if name == "cat" {
-                            let input_without_cat = input.strip_prefix("cat").unwrap().trim();
-                            if input_without_cat.starts_with('"')
-                                && input_without_cat.ends_with('"')
-                            {
-                                return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
-                                    name: name.to_owned(),
-                                    args: Self::double_quotes_parser(input_without_cat, false),
-                                }));
-                            }
-                            if input_without_cat.starts_with('\'')
-                                && input_without_cat.ends_with('\'')
-                            {
-                                return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
-                                    name: name.to_owned(),
-                                    args: Self::single_quotes_parser(input_without_cat),
-                                }));
-                            }
-
-                            // handle "\" case
-                            let mut chars = input.chars().skip(4).peekable();
-                            let mut result = String::new();
-                            while let Some(ch) = chars.next() {
-                                match ch {
-                                    '\\' => {
-                                        if let Some(&next_ch) = chars.peek() {
-                                            if next_ch.is_ascii_whitespace() {
-                                                result.push(' ');
-                                                chars.next();
-                                            }
-                                        }
-                                    }
-                                    _ => {
-                                        result.push(ch);
-                                    }
-                                }
-                            }
-                            return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
-                                name: name.to_owned(),
-                                args: vec![result.trim().to_string()],
-                            }));
-                        }
-                        return Ok(Self::ExternalProgram(ExternalProgramNameAndArgs {
-                            name: name.to_owned(),
-                            args: arg
-                                .iter()
-                                .skip(1)
-                                .map(|arg| arg.to_string())
-                                .collect::<Vec<_>>(),
-                        }));
-                    }
-                }
+                command: command_name.to_string(),
+            }));
+        } else {
+            if let Some(path) = path {
+                locate_command_in_paths(path, &command_name, None)
+                    .unwrap_or_else(|_| Self::Type(Err(command_name.to_string())))
+            } else {
+                Self::Invalid
             }
         }
-        // the for loop didn't start, so no files found in $PATH
-        Err(ShellErrors::NoFilesInPATH)
-    }
-
-    pub fn locate_command_type_in_paths(path: &str, arg: &str) -> Result<Self, ShellErrors> {
-        for path_part in path.split(':') {
-            for entry in fs::read_dir(path_part).map_err(|_| ShellErrors::FileNotFoundInPath)? {
-                let entry = entry.unwrap();
-                let path = entry.path();
-                if let Some(command_file) = path.file_name() {
-                    if arg == command_file.to_str().unwrap() {
-                        return Ok(Self::Type(Ok(PathAndType {
-                            path: Some(path.to_str().unwrap().to_owned()),
-                            command: arg.to_owned(),
-                        })));
-                    }
-                }
-            }
-        }
-        // the for loop didn't start, so no files found in $PATH
-        Err(ShellErrors::NoFilesInPATH)
     }
 }
 
@@ -349,4 +94,80 @@ pub enum ShellErrors {
     FileNotFoundInPath,
     #[error("No executable files were found in $PATH")]
     NoFilesInPATH,
+}
+
+struct ShellCommand {
+    name: String,
+    args: Vec<String>,
+}
+
+fn parse_command_args(input: &str) -> ShellCommand {
+    let (mut in_single_quote, mut in_double_quote) = (false, false);
+    let mut handle_backslash = false;
+    let mut cur_arg = String::new();
+    let mut total_args: Vec<String> = Vec::new();
+    let mut idx = 0;
+
+    while idx < input.len() {
+        let c = input.as_bytes()[idx] as char;
+        if handle_backslash {
+            if in_single_quote {
+                cur_arg.push('\\');
+                cur_arg.push(c);
+            } else if in_double_quote {
+                // escape certain symbols
+                if ['\\', '$', '"'].contains(&c) {
+                    cur_arg.push(c);
+                } else {
+                    cur_arg.push('\\');
+                    cur_arg.push(c);
+                }
+            } else {
+                cur_arg.push(c);
+            }
+            handle_backslash = false;
+        } else {
+            match c {
+                '"' => {
+                    if in_single_quote {
+                        cur_arg.push(c);
+                    } else {
+                        in_double_quote = !in_double_quote;
+                    }
+                }
+                '\'' => {
+                    if in_double_quote {
+                        cur_arg.push(c);
+                    } else {
+                        in_single_quote = !in_single_quote;
+                    }
+                }
+                ' ' => {
+                    if in_single_quote || in_double_quote {
+                        cur_arg.push(c);
+                    } else {
+                        if !cur_arg.is_empty() {
+                            total_args.push(cur_arg);
+                            cur_arg = String::new();
+                        }
+                    }
+                }
+                '\\' => {
+                    handle_backslash = true;
+                }
+                _ => cur_arg.push(c),
+            }
+        }
+        idx += 1;
+    }
+
+    if !cur_arg.is_empty() {
+        total_args.push(cur_arg);
+    }
+
+    let (command_name, args) = total_args.split_at(1);
+    ShellCommand {
+        name: command_name[0].clone(),
+        args: args.to_vec(),
+    }
 }

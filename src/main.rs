@@ -1,6 +1,7 @@
 mod command;
 mod input_handler;
 mod trie;
+mod utils;
 
 use command::MyShellCommand;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -36,7 +37,7 @@ fn main() -> ExitCode {
             }
             MyShellCommand::Type(arg) => {
                 match arg {
-                    Ok(command::PathAndType { path, command }) => {
+                    Ok(utils::PathAndType { path, command }) => {
                         if let Some(path) = path {
                             println!("{} is {}", command, path);
                         } else {
@@ -63,7 +64,7 @@ fn main() -> ExitCode {
                     }
                 };
             }
-            MyShellCommand::Exit(_) | MyShellCommand::Invalid(_) => {
+            MyShellCommand::Exit(_) | MyShellCommand::Invalid => {
                 println!("{}: command not found", input.trim_end());
                 io::stdout().flush().unwrap();
             }
